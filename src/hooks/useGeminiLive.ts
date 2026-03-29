@@ -643,7 +643,7 @@ export const useGeminiLive = ({
       });
 
       if (response.usageMetadata?.totalTokenCount) {
-        addTokenUsage(response.usageMetadata.totalTokenCount, 'gemini-2.5-flash-image');
+        addTokenUsage(response.usageMetadata.totalTokenCount, 'gemini-3.1-flash-Live-preview');
       }
 
       let imageUrl = '';
