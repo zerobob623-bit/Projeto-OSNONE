@@ -643,7 +643,7 @@ export const useGeminiLive = ({
       });
 
       if (response.usageMetadata?.totalTokenCount) {
-        addTokenUsage(response.usageMetadata.totalTokenCount, 'gemini-3.1-flash-Live-preview');
+        addTokenUsage(response.usageMetadata.totalTokenCount, 'gemini-live-2.5-flash-native-audio');
       }
 
       let imageUrl = '';
@@ -787,7 +787,7 @@ export const useGeminiLive = ({
         outputWorkletLoadedRef.current = true;
       }
       
-      console.log("🚀 Iniciando conexão híbrida: Gemini 3.1 Flash Live Preview (Voz) + Groq (Texto)...");
+      console.log("🚀 Iniciando conexão híbrida: Gemini 2.5 Flash Native Audio (Voz) + Groq (Texto)...");
 
       const baseTools = [
         toggleScreenSharingFunc, changeVoiceFunc, openUrlFunc, interactFunc, 
@@ -810,7 +810,7 @@ export const useGeminiLive = ({
 
       const sessionPromise = ai.live.connect({
         // ✅ Modelo compatível para Live API (Voz em tempo real)
-        model: "gemini-3.1-flash-live-preview",
+        model: "gemini-live-2.5-flash-native-audio",
         
         config: {
           responseModalities: [Modality.AUDIO],
