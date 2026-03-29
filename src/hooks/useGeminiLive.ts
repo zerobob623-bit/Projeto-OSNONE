@@ -83,6 +83,11 @@ export const useGeminiLive = ({
   const isMutedRef = useRef(isMuted);
   const connectionTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // ✅ FIX: Guards para evitar duplo registro do AudioWorklet processor
+  const outputWorkletLoadedRef = useRef(false);
+  const inputWorkletLoadedRef = useRef(false);
+  const workletBlobUrlRef = useRef<string | null>(null);
+
   useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
@@ -439,6 +444,9 @@ export const useGeminiLive = ({
       inputAudioContextRef.current.close().catch(console.error);
       inputAudioContextRef.current = null;
     }
+    // ✅ FIX: reset input worklet guard when input context is destroyed
+    inputWorkletLoadedRef.current = false;
+
     activeSourcesRef.current.forEach(source => {
       try { source.stop(); } catch (e) {}
     });
@@ -446,6 +454,8 @@ export const useGeminiLive = ({
     if (!isReconnecting && audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(console.error);
       audioContextRef.current = null;
+      // ✅ FIX: reset output worklet guard when output context is destroyed
+      outputWorkletLoadedRef.current = false;
     }
     setIsListening(false);
     setIsSpeaking(false);
@@ -672,10 +682,6 @@ export const useGeminiLive = ({
   // 🌐 FUNÇÕES DE LEITURA DA WEB
   // ============================================
 
-  /**
-   * Lê o conteúdo de uma URL usando o endpoint do servidor
-   * Extrai texto limpo de artigos, notícias e páginas web
-   */
   const readUrlContent = useCallback(async (url: string): Promise<string> => {
     try {
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -734,8 +740,10 @@ export const useGeminiLive = ({
         apiKey: apiKey,
       });
       
+      // ✅ FIX: Reutiliza o AudioContext de output se já existir e estiver aberto
       if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
         audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+        outputWorkletLoadedRef.current = false; // reset guard para novo contexto
       }
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
@@ -765,9 +773,19 @@ export const useGeminiLive = ({
         }
         registerProcessor('audio-processor', AudioProcessor);
       `;
-      const blob = new Blob([workletCode], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      await audioContextRef.current.audioWorklet.addModule(url);
+
+      // ✅ FIX: Cria o blob URL uma única vez e reutiliza
+      if (!workletBlobUrlRef.current) {
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        workletBlobUrlRef.current = URL.createObjectURL(blob);
+      }
+      const url = workletBlobUrlRef.current;
+
+      // ✅ FIX: Só chama addModule no output context se ainda não foi carregado
+      if (!outputWorkletLoadedRef.current) {
+        await audioContextRef.current.audioWorklet.addModule(url);
+        outputWorkletLoadedRef.current = true;
+      }
       
       console.log("🚀 Iniciando conexão híbrida: Gemini 3.1 Flash Live Preview (Voz) + Groq (Texto)...");
 
@@ -791,20 +809,20 @@ export const useGeminiLive = ({
       }
 
       const sessionPromise = ai.live.connect({
-    // ✅ Modelo compatível para Live API (Voz em tempo real)
-    model: "gemini-3.1-flash-live-preview",
-    
-    config: {
-      responseModalities: [Modality.AUDIO],
-      ...(systemInstruction ? { systemInstruction } : {}),
-      speechConfig: {
-        voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_MAPPING[voice] || 'Kore' } },
-      },
-      tools: [
-        { googleSearch: {} },
-        { functionDeclarations: baseTools }
-      ]
-    },
+        // ✅ Modelo compatível para Live API (Voz em tempo real)
+        model: "gemini-3.1-flash-live-preview",
+        
+        config: {
+          responseModalities: [Modality.AUDIO],
+          ...(systemInstruction ? { systemInstruction } : {}),
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_MAPPING[voice] || 'Kore' } },
+          },
+          tools: [
+            { googleSearch: {} },
+            { functionDeclarations: baseTools }
+          ]
+        },
         callbacks: {
           onopen: () => {
             console.log("✅ Conectado com sucesso à Live API!");
@@ -1139,7 +1157,6 @@ export const useGeminiLive = ({
             isConnectedRef.current = false;
             sessionRef.current = null;
             if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current);
-            // Auto-reconnect logic can be added here if needed, but for now just ensure clean state
             stopAudio(true);
           },
           onerror: (err: any) => {
@@ -1170,26 +1187,29 @@ export const useGeminiLive = ({
       });
       streamRef.current = stream;
       
+      // ✅ FIX: Sempre cria um novo inputAudioContext (o antigo foi fechado no stopAudio)
       const inputCtx = new AudioContext({ sampleRate: 16000 });
       if (inputCtx.state === 'suspended') {
         await inputCtx.resume();
       }
       inputAudioContextRef.current = inputCtx;
+      inputWorkletLoadedRef.current = false; // novo contexto, precisa carregar o worklet
+
       const source = inputCtx.createMediaStreamSource(stream);
-      await inputCtx.audioWorklet.addModule(url);
+
+      // ✅ FIX: Só chama addModule no input context se ainda não foi carregado
+      if (!inputWorkletLoadedRef.current) {
+        await inputCtx.audioWorklet.addModule(url);
+        inputWorkletLoadedRef.current = true;
+      }
+
       const inputWorklet = new AudioWorkletNode(inputCtx, 'audio-processor');
       audioWorkletNodeRef.current = inputWorklet;
       source.connect(inputWorklet);
-      
-      // Otimização para chamadas curtas (30s limite) removida para manter a conexão contínua
-      // connectionTimerRef.current = setTimeout(() => {
-      //   addMessage({ role: 'model', text: "Tempo limite de 30 segundos atingido para economia de tokens. Reconecte se precisar continuar." });
-      //   stopAudio();
-      // }, 30000);
 
       let audioBuffer: Int16Array[] = [];
       let currentBufferSize = 0;
-      const TARGET_BUFFER_SIZE = 1024; // Reduzido de 2048 para enviar chunks menores e mais frequentes
+      const TARGET_BUFFER_SIZE = 1024;
 
       inputWorklet.port.onmessage = (event) => {
         const int16Data = event.data;
@@ -1212,8 +1232,7 @@ export const useGeminiLive = ({
           const currentVolume = sum / combined.length;
           setVolume(currentVolume);
           
-          // Simple Voice Activity Detection (VAD) threshold
-          const VAD_THRESHOLD = 0.0005; // Reduced further for better sensitivity
+          const VAD_THRESHOLD = 0.0005;
           
           if (!isMutedRef.current && sessionRef.current && isConnectedRef.current && currentVolume > VAD_THRESHOLD && !isSpeakingRef.current && !isThinkingRef.current) {
             try {
@@ -1226,8 +1245,7 @@ export const useGeminiLive = ({
               console.error("Error sending audio:", e);
             }
           } else if (!isMutedRef.current && sessionRef.current && isConnectedRef.current && !isSpeaking && !isThinking) {
-             // Send empty audio chunks to keep the connection alive and allow the model to process silence
-             try {
+            try {
               sessionRef.current.then((session: any) => {
                 if (session && typeof session.sendRealtimeInput === 'function') {
                   session.sendRealtimeInput({ audio: { data: toBase64(combined.buffer), mimeType: 'audio/pcm;rate=16000' } });
