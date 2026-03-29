@@ -769,7 +769,7 @@ export const useGeminiLive = ({
       const url = URL.createObjectURL(blob);
       await audioContextRef.current.audioWorklet.addModule(url);
       
-      console.log("🚀 Iniciando conexão híbrida: Gemini 2.5 Flash (Voz) + Groq (Texto)...");
+      console.log("🚀 Iniciando conexão híbrida: Gemini 3.1 Flash Live Preview (Voz) + Groq (Texto)...");
 
       const baseTools = [
         toggleScreenSharingFunc, changeVoiceFunc, openUrlFunc, interactFunc, 
